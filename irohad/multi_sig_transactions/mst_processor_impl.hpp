@@ -55,7 +55,7 @@ namespace iroha {
     // ------------------| MstTransportNotification override |------------------
 
     void onNewState(const shared_model::crypto::PublicKey &from,
-                    ConstRefState new_state) override;
+                    MstState new_state) override;
 
     // ----------------------------| end override |-----------------------------
 
@@ -83,7 +83,7 @@ namespace iroha {
     void updatedBatchesNotify(ConstRefState state) const;
 
     /**
-     * Notify subscribers when some of the bathes get expired
+     * Notify subscribers when some of the batches get expired
      * @param state with those batches
      */
     void expiredBatchesNotify(ConstRefState state) const;
