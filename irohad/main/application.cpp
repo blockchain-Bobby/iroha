@@ -423,8 +423,8 @@ Irohad::RunResult Irohad::initOrderingGate() {
        ++i) {
     auto block_result = (*block_query)->getBlock(i);
 
-    if (auto e = boost::get<expected::Error<std::string>>(&block_result)) {
-      return iroha::expected::makeError(std::move(e->error));
+    if (auto e = expected::resultToOptionalError(block_result)) {
+      return iroha::expected::makeError(std::move(e->message));
     }
 
     auto &block =
@@ -545,9 +545,9 @@ Irohad::RunResult Irohad::initConsensusGate() {
   }
   auto block_var =
       (*block_query)->getBlock((*block_query)->getTopBlockHeight());
-  if (auto e = boost::get<expected::ErrorOf<decltype(block_var)>>(&block_var)) {
+  if (auto e = expected::resultToOptionalError(block_var)) {
     return iroha::expected::makeError<std::string>(
-        "Failed to get the top block: " + e->error);
+        "Failed to get the top block: " + e->message);
   }
 
   auto &block =
@@ -669,10 +669,26 @@ Irohad::RunResult Irohad::initMstProcessor() {
 }
 
 Irohad::RunResult Irohad::initPendingTxsStorage() {
+  using PreparedTransactionDescriptor =
+      PendingTransactionStorageImpl::PreparedTransactionDescriptor;
   pending_txs_storage_ = std::make_shared<PendingTransactionStorageImpl>(
       mst_processor->onStateUpdate(),
       mst_processor->onPreparedBatches(),
-      mst_processor->onExpiredBatches());
+      mst_processor->onExpiredBatches(),
+      pcs->onProposal().flat_map([](const OrderingEvent &event)
+                                     -> rxcpp::observable<
+                                         PreparedTransactionDescriptor> {
+        if (not event.proposal) {
+          return rxcpp::observable<>::empty<PreparedTransactionDescriptor>();
+        }
+        auto prepared_transactions =
+            event.proposal.get()->transactions()
+            | boost::adaptors::transformed(
+                  [](const auto &tx) -> PreparedTransactionDescriptor {
+                    return std::make_pair(tx.creatorAccountId(), tx.hash());
+                  });
+        return rxcpp::observable<>::iterate(prepared_transactions);
+      }));
   log_->info("[Init] => pending transactions storage");
   return {};
 }
@@ -791,8 +807,8 @@ Irohad::RunResult Irohad::run() {
     }
     auto block_var =
         (*block_query)->getBlock((*block_query)->getTopBlockHeight());
-    if (auto e = boost::get<expected::Error<std::string>>(&block_var)) {
-      return expected::makeError("Failed to get the top block: " + e->error);
+    if (auto e = expected::resultToOptionalError(block_var)) {
+      return expected::makeError("Failed to get the top block: " + e->message);
     }
 
     auto &block =

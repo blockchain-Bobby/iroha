@@ -39,7 +39,19 @@ namespace shared_model {
     MockCommandFactory::constructAddPeer(const Peer &peer) const {
       return createFactoryResult<MockAddPeer>(
           [&peer](FactoryResult<MockAddPeer> specific_cmd_mock) {
-            EXPECT_CALL(*specific_cmd_mock, peer()).WillRepeatedly(ReturnRef(peer));
+            EXPECT_CALL(*specific_cmd_mock, peer())
+                .WillRepeatedly(ReturnRef(peer));
+            return specific_cmd_mock;
+          });
+    }
+
+    MockCommandFactory::FactoryResult<MockRemovePeer>
+    MockCommandFactory::constructRemovePeer(
+        const types::PubkeyType &pubkey) const {
+      return createFactoryResult<MockRemovePeer>(
+          [&pubkey](FactoryResult<MockRemovePeer> specific_cmd_mock) {
+            ON_CALL(*specific_cmd_mock, pubkey())
+                .WillByDefault(ReturnRefOfCopy(pubkey));
             return specific_cmd_mock;
           });
     }
@@ -297,6 +309,29 @@ namespace shared_model {
                 .WillRepeatedly(ReturnRefOfCopy(cmd_description));
             EXPECT_CALL(*specific_cmd_mock, amount())
                 .WillRepeatedly(ReturnRefOfCopy(cmd_amount));
+            return specific_cmd_mock;
+          });
+    }
+
+    MockCommandFactory::FactoryResult<MockCompareAndSetAccountDetail>
+    MockCommandFactory::constructCompareAndSetAccountDetail(
+        const shared_model::interface::types::AccountIdType &account_id,
+        const shared_model::interface::types::AccountDetailKeyType &cmd_key,
+        const shared_model::interface::types::AccountDetailValueType &cmd_value,
+        const boost::optional<
+            shared_model::interface::types::AccountDetailValueType>
+            cmd_old_value) const {
+      return createFactoryResult<MockCompareAndSetAccountDetail>(
+          [&account_id, &cmd_key, &cmd_value, &cmd_old_value](
+              FactoryResult<MockCompareAndSetAccountDetail> specific_cmd_mock) {
+            EXPECT_CALL(*specific_cmd_mock, accountId())
+                .WillRepeatedly(ReturnRefOfCopy(account_id));
+            EXPECT_CALL(*specific_cmd_mock, key())
+                .WillRepeatedly(ReturnRefOfCopy(cmd_key));
+            EXPECT_CALL(*specific_cmd_mock, value())
+                .WillRepeatedly(ReturnRefOfCopy(cmd_value));
+            EXPECT_CALL(*specific_cmd_mock, oldValue())
+                .WillRepeatedly(Return(cmd_old_value));
             return specific_cmd_mock;
           });
     }
