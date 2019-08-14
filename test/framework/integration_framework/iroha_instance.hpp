@@ -17,6 +17,7 @@
 #include "logger/logger_fwd.hpp"
 #include "logger/logger_manager_fwd.hpp"
 #include "multi_sig_transactions/gossip_propagation_strategy_params.hpp"
+#include "torii/tls_params.hpp"
 
 namespace shared_model {
   namespace interface {
@@ -42,15 +43,19 @@ namespace integration_framework {
      * @param irohad_log_manager - the log manager for irohad
      * @param log - the log for internal messages
      * @param dbname is a name of postgres database
+     * @param tls_params - optional tls parameters for torii
+     *   @see iroha::torii::TlsParams
      */
     IrohaInstance(bool mst_support,
-                  const std::string &block_store_path,
+                  const boost::optional<std::string> &block_store_path,
                   const std::string &listen_ip,
                   size_t torii_port,
                   size_t internal_port,
                   logger::LoggerManagerTreePtr irohad_log_manager,
                   logger::LoggerPtr log,
-                  const boost::optional<std::string> &dbname = boost::none);
+                  const boost::optional<std::string> &dbname = boost::none,
+                  const boost::optional<iroha::torii::TlsParams> &tls_params =
+                      boost::none);
 
     /// Initialize Irohad. Throws on error.
     void init();
@@ -74,11 +79,15 @@ namespace integration_framework {
     //      IR-1885              refactoring requested.
     std::shared_ptr<TestIrohad> &getIrohaInstance();
 
+    /// Terminate Iroha instance and clean the resources up.
+    void terminateAndCleanup();
+
     // config area
-    const std::string block_store_dir_;
+    const boost::optional<std::string> block_store_dir_;
     const std::string working_dbname_;
     const std::string listen_ip_;
     const size_t torii_port_;
+    boost::optional<iroha::torii::TlsParams> torii_tls_params_;
     const size_t internal_port_;
     const std::chrono::milliseconds proposal_delay_;
     const std::chrono::milliseconds vote_delay_;
@@ -93,9 +102,6 @@ namespace integration_framework {
     logger::LoggerManagerTreePtr irohad_log_manager_;
 
     logger::LoggerPtr log_;
-
-    boost::optional<std::chrono::milliseconds> mst_gossip_emitting_period_;
-    boost::optional<uint32_t> mst_gossip_amount_per_once_;
   };
 }  // namespace integration_framework
 #endif  // IROHA_IROHA_INSTANCE_HPP

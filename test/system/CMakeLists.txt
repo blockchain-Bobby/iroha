@@ -5,6 +5,7 @@
 
 addtest(irohad_test irohad_test.cpp)
 target_link_libraries(irohad_test
+        ametsuchi
         boost
         SOCI::postgresql
         SOCI::core
@@ -19,6 +20,7 @@ target_link_libraries(irohad_test
         iroha_conf_literals
         logger
         logger_manager
+        pg_connection_init
         )
 add_dependencies(irohad_test irohad)
 add_definitions(-DPATHIROHAD="${PROJECT_BINARY_DIR}/bin")

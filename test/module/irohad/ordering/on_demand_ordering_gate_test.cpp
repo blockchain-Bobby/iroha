@@ -12,7 +12,9 @@
 #include "interfaces/iroha_internal/transaction_batch_impl.hpp"
 #include "module/irohad/ametsuchi/mock_tx_presence_cache.hpp"
 #include "module/irohad/ordering/mock_on_demand_os_notification.hpp"
+#include "module/irohad/ordering/mock_proposal_creation_strategy.hpp"
 #include "module/irohad/ordering/ordering_mocks.hpp"
+#include "module/shared_model/builders/protobuf/test_transaction_builder.hpp"
 #include "module/shared_model/interface_mocks.hpp"
 #include "ordering/impl/on_demand_common.hpp"
 
@@ -25,6 +27,7 @@ using namespace framework::test_subscriber;
 using ::testing::_;
 using ::testing::AtMost;
 using ::testing::ByMove;
+using ::testing::get;
 using ::testing::NiceMock;
 using ::testing::Return;
 using ::testing::ReturnRefOfCopy;
@@ -41,6 +44,8 @@ class OnDemandOrderingGateTest : public ::testing::Test {
     auto ufactory = std::make_unique<NiceMock<MockUnsafeProposalFactory>>();
     factory = ufactory.get();
     tx_cache = std::make_shared<ametsuchi::MockTxPresenceCache>();
+    proposal_creation_strategy =
+        std::make_shared<MockProposalCreationStrategy>();
     ON_CALL(*tx_cache,
             check(testing::Matcher<const shared_model::crypto::Hash &>(_)))
         .WillByDefault(
@@ -54,6 +59,7 @@ class OnDemandOrderingGateTest : public ::testing::Test {
         cache,
         std::move(ufactory),
         tx_cache,
+        proposal_creation_strategy,
         1000,
         getTestLogger("OrderingGate"));
 
@@ -64,6 +70,25 @@ class OnDemandOrderingGateTest : public ::testing::Test {
         shared_model::crypto::Hash{"hash"});
   }
 
+  /**
+   * Create a simple transaction
+   * @return created transaction
+   */
+  auto generateTx() {
+    const shared_model::crypto::Keypair kDefaultKey =
+        shared_model::crypto::DefaultCryptoAlgorithmType::generateKeypair();
+    std::string creator = "account@domain";
+
+    return TestUnsignedTransactionBuilder()
+        .creatorAccountId(creator)
+        .setAccountQuorum(creator, 1)
+        .createdTime(iroha::time::now())
+        .quorum(1)
+        .build()
+        .signAndAddSignature(kDefaultKey)
+        .finish();
+  }
+
   rxcpp::subjects::subject<
       std::shared_ptr<const cache::OrderingGateCache::HashesSetType>>
       processed_tx_hashes;
@@ -72,6 +97,7 @@ class OnDemandOrderingGateTest : public ::testing::Test {
   std::shared_ptr<MockOdOsNotification> notification;
   NiceMock<MockUnsafeProposalFactory> *factory;
   std::shared_ptr<ametsuchi::MockTxPresenceCache> tx_cache;
+  std::shared_ptr<MockProposalCreationStrategy> proposal_creation_strategy;
   std::shared_ptr<OnDemandOrderingGate> ordering_gate;
 
   std::shared_ptr<cache::MockOrderingGateCache> cache;
@@ -259,6 +285,59 @@ TEST_F(OnDemandOrderingGateTest, ReplayedTransactionInProposal) {
       *factory,
       unsafeCreateProposal(
           _, _, MockUnsafeProposalFactory::TransactionsCollectionType()))
+      .Times(AtMost(1))
+      .WillOnce(Return(ByMove(std::move(ufactory_proposal))));
+
+  auto gate_wrapper =
+      make_test_subscriber<CallExact>(ordering_gate->onProposal(), 1);
+  gate_wrapper.subscribe([&](auto proposal) {});
+  rounds.get_subscriber().on_next(
+      OnDemandOrderingGate::RoundSwitch(round, ledger_state));
+
+  ASSERT_TRUE(gate_wrapper.validate());
+}
+
+MATCHER_P(hashEq, arg1, "") {
+  return boost::size(arg) == 1 && arg.begin()->hash().hex() == arg1;
+}
+
+/**
+ * @given initialized ordering gate
+ * @when new proposal arrives and has two same transactions
+ * @then the resulting proposal emitted by ordering gate contain only one
+ * this transaction
+ */
+TEST_F(OnDemandOrderingGateTest, RepeatedTransactionInProposal) {
+  // initialize mock transaction
+  auto tx1 = generateTx();
+  std::vector<shared_model::proto::Transaction> txs;
+  txs.push_back(tx1);
+  txs.push_back(tx1);
+
+  auto proposal = std::make_shared<MockProposal>();
+  ON_CALL(*proposal, transactions()).WillByDefault(Return(txs));
+
+  auto arriving_proposal = boost::make_optional(
+      std::static_pointer_cast<const shared_model::interface::Proposal>(
+          std::move(proposal)));
+
+  // set expectations for ordering service
+  EXPECT_CALL(*ordering_service, onCollaborationOutcome(round)).Times(1);
+  EXPECT_CALL(*notification, onRequestProposal(round))
+      .WillOnce(Return(ByMove(std::move(arriving_proposal))));
+  EXPECT_CALL(*tx_cache,
+              check(testing::Matcher<const shared_model::crypto::Hash &>(_)))
+      .WillRepeatedly(Return(boost::make_optional<ametsuchi::TxCacheStatusType>(
+          iroha::ametsuchi::tx_cache_status_responses::Missing())));
+
+  auto ufactory_proposal = std::make_unique<MockProposal>();
+  auto factory_proposal = ufactory_proposal.get();
+  std::vector<shared_model::proto::Transaction> etxs;
+  etxs.push_back(tx1);
+
+  ON_CALL(*factory_proposal, transactions()).WillByDefault(Return(etxs));
+
+  EXPECT_CALL(*factory, unsafeCreateProposal(_, _, hashEq(tx1.hash().hex())))
       .Times(AtMost(1))
       .WillOnce(Return(ByMove(std::move(ufactory_proposal))));
 

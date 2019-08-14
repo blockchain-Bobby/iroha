@@ -60,6 +60,7 @@ target_link_libraries(postgres_executor_test
 
 addtest(postgres_query_executor_test postgres_query_executor_test.cpp)
 target_link_libraries(postgres_query_executor_test
+    shared_model_plain_backend
     shared_model_proto_backend
     ametsuchi_fixture
     ametsuchi
@@ -88,7 +89,10 @@ target_link_libraries(flat_file_block_storage_test
 addtest(postgres_block_storage_test postgres_block_storage_test.cpp)
 target_link_libraries(postgres_block_storage_test
      ametsuchi
-     ametsuchi_fixture
+     generator
+     test_logger
+     integration_framework_config_helper
+     pg_connection_init
      )
 
 add_library(ametsuchi_fixture INTERFACE)

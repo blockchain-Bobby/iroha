@@ -5,7 +5,10 @@
 
 set(EXECUTABLE_OUTPUT_PATH ${PROJECT_BINARY_DIR}/bin)
 
-add_library(server_runner server_runner.cpp)
+add_library(server_runner
+    server_runner.cpp
+    tls_keypair.cpp
+    )
 target_link_libraries(server_runner
     logger
     grpc++
@@ -28,6 +31,11 @@ target_link_libraries(pg_connection_init
     failover_callback
     pool_wrapper
     logger
+    )
+
+add_library(pending_txs_storage_init impl/pending_transaction_storage_init.cpp)
+target_link_libraries(pending_txs_storage_init
+    pending_txs_storage
     )
 
 add_library(application
@@ -62,9 +70,10 @@ target_link_libraries(application
     block_loader_service
     mst_processor
     torii_service
-    pending_txs_storage
+    pending_txs_storage_init
     common
     pg_connection_init
+    generator
     )
 
 add_executable(irohad irohad.cpp)

@@ -215,7 +215,8 @@ int main(int argc, char *argv[]) {
       std::move(config.initial_peers),
       log_manager->getChild("Irohad"),
       boost::make_optional(config.mst_support,
-                           iroha::GossipPropagationStrategyParams{}));
+                           iroha::GossipPropagationStrategyParams{}),
+      config.torii_tls_params);
 
   // Check if iroha daemon storage was successfully initialized
   if (not irohad.storage) {
@@ -276,7 +277,10 @@ int main(int argc, char *argv[]) {
       // clear previous storage if any
       irohad.dropStorage();
 
-      irohad.storage->insertBlock(block.value());
+      if (not irohad.storage->insertBlock(block.value())) {
+        log->critical("Could not apply genesis block!");
+        return EXIT_FAILURE;
+      }
       log->info("Genesis block inserted, number of transactions: {}",
                 block.value()->transactions().size());
     }

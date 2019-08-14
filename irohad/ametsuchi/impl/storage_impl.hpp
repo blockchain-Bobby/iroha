@@ -20,43 +20,44 @@
 #include "ametsuchi/ledger_state.hpp"
 #include "ametsuchi/reconnection_strategy.hpp"
 #include "common/result.hpp"
-#include "interfaces/iroha_internal/block_json_converter.hpp"
 #include "interfaces/permission_to_string.hpp"
 #include "logger/logger_fwd.hpp"
 #include "logger/logger_manager_fwd.hpp"
 
+namespace shared_model {
+  namespace interface {
+    class QueryResponseFactory;
+  }  // namespace interface
+}  // namespace shared_model
+
 namespace iroha {
+
+  class PendingTransactionStorage;
+
   namespace ametsuchi {
-
-    struct ConnectionContext {
-      explicit ConnectionContext(std::unique_ptr<KeyValueStorage> block_store);
-
-      std::unique_ptr<KeyValueStorage> block_store;
-    };
-
     class StorageImpl : public Storage {
-     protected:
-      static expected::Result<ConnectionContext, std::string> initConnections(
-          std::string block_store_dir, logger::LoggerPtr log);
-
      public:
       static expected::Result<std::shared_ptr<StorageImpl>, std::string> create(
-          std::string block_store_dir,
           std::unique_ptr<ametsuchi::PostgresOptions> postgres_options,
-          PoolWrapper pool_wrapper,
-          std::shared_ptr<shared_model::interface::BlockJsonConverter>
-              converter,
+          std::shared_ptr<PoolWrapper> pool_wrapper,
           std::shared_ptr<shared_model::interface::PermissionToString>
               perm_converter,
-          std::unique_ptr<BlockStorageFactory> block_storage_factory,
+          std::shared_ptr<PendingTransactionStorage> pending_txs_storage,
+          std::shared_ptr<shared_model::interface::QueryResponseFactory>
+              query_response_factory,
+          std::unique_ptr<BlockStorageFactory> temporary_block_storage_factory,
+          std::unique_ptr<BlockStorage> persistent_block_storage,
           logger::LoggerManagerTreePtr log_manager,
           size_t pool_size = 10);
 
-      expected::Result<std::unique_ptr<TemporaryWsv>, std::string>
-      createTemporaryWsv() override;
+      expected::Result<std::unique_ptr<CommandExecutor>, std::string>
+      createCommandExecutor() override;
 
-      expected::Result<std::unique_ptr<MutableStorage>, std::string>
-      createMutableStorage() override;
+      std::unique_ptr<TemporaryWsv> createTemporaryWsv(
+          std::shared_ptr<CommandExecutor> command_executor) override;
+
+      std::unique_ptr<MutableStorage> createMutableStorage(
+          std::shared_ptr<CommandExecutor> command_executor) override;
 
       boost::optional<std::shared_ptr<PeerQuery>> createPeerQuery()
           const override;
@@ -75,8 +76,9 @@ namespace iroha {
       expected::Result<void, std::string> insertPeer(
           const shared_model::interface::Peer &peer) override;
 
-      expected::Result<std::unique_ptr<MutableStorage>, std::string>
-      createMutableStorage(BlockStorageFactory &storage_factory) override;
+      std::unique_ptr<MutableStorage> createMutableStorage(
+          std::shared_ptr<CommandExecutor> command_executor,
+          BlockStorageFactory &storage_factory) override;
 
       void reset() override;
 
@@ -108,28 +110,26 @@ namespace iroha {
       ~StorageImpl() override;
 
      protected:
-      StorageImpl(boost::optional<std::shared_ptr<const iroha::LedgerState>>
-                      ledger_state,
-                  std::unique_ptr<ametsuchi::PostgresOptions> postgres_options,
-                  std::unique_ptr<KeyValueStorage> block_store,
-                  PoolWrapper pool_wrapper,
-                  std::shared_ptr<shared_model::interface::BlockJsonConverter>
-                      converter,
-                  std::shared_ptr<shared_model::interface::PermissionToString>
-                      perm_converter,
-                  std::unique_ptr<BlockStorageFactory> block_storage_factory,
-                  size_t pool_size,
-                  logger::LoggerManagerTreePtr log_manager);
+      StorageImpl(
+          boost::optional<std::shared_ptr<const iroha::LedgerState>>
+              ledger_state,
+          std::unique_ptr<ametsuchi::PostgresOptions> postgres_options,
+          std::unique_ptr<BlockStorage> block_store,
+          std::shared_ptr<PoolWrapper> pool_wrapper,
+          std::shared_ptr<shared_model::interface::PermissionToString>
+              perm_converter,
+          std::shared_ptr<PendingTransactionStorage> pending_txs_storage,
+          std::shared_ptr<shared_model::interface::QueryResponseFactory>
+              query_response_factory,
+          std::unique_ptr<BlockStorageFactory> temporary_block_storage_factory,
+          size_t pool_size,
+          logger::LoggerManagerTreePtr log_manager);
 
       // db info
       const std::unique_ptr<ametsuchi::PostgresOptions> postgres_options_;
 
      private:
       using StoreBlockResult = iroha::expected::Result<void, std::string>;
-
-      /**
-       * revert prepared transaction
-       */
 
       /**
        * add block to block storage
@@ -142,9 +142,9 @@ namespace iroha {
        */
       void tryRollback(soci::session &session);
 
-      std::unique_ptr<KeyValueStorage> block_store_;
+      std::unique_ptr<BlockStorage> block_store_;
 
-      PoolWrapper pool_wrapper_;
+      std::shared_ptr<PoolWrapper> pool_wrapper_;
 
       /// ref for pool_wrapper_::connection_pool_
       std::shared_ptr<soci::connection_pool> &connection_;
@@ -154,12 +154,15 @@ namespace iroha {
           std::shared_ptr<const shared_model::interface::Block>>
           notifier_;
 
-      std::shared_ptr<shared_model::interface::BlockJsonConverter> converter_;
-
       std::shared_ptr<shared_model::interface::PermissionToString>
           perm_converter_;
 
-      std::unique_ptr<BlockStorageFactory> block_storage_factory_;
+      std::shared_ptr<PendingTransactionStorage> pending_txs_storage_;
+
+      std::shared_ptr<shared_model::interface::QueryResponseFactory>
+          query_response_factory_;
+
+      std::unique_ptr<BlockStorageFactory> temporary_block_storage_factory_;
 
       logger::LoggerManagerTreePtr log_manager_;
       logger::LoggerPtr log_;

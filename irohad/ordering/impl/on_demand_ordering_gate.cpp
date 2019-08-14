@@ -31,6 +31,7 @@ OnDemandOrderingGate::OnDemandOrderingGate(
     std::shared_ptr<cache::OrderingGateCache> cache,
     std::shared_ptr<shared_model::interface::UnsafeProposalFactory> factory,
     std::shared_ptr<ametsuchi::TxPresenceCache> tx_cache,
+    std::shared_ptr<ProposalCreationStrategy> proposal_creation_strategy,
     size_t transaction_limit,
     logger::LoggerPtr log)
     : log_(std::move(log)),
@@ -44,11 +45,15 @@ OnDemandOrderingGate::OnDemandOrderingGate(
                         hashes->size());
             cache_->remove(*hashes);
           })),
-      round_switch_subscription_(
-          round_switch_events.subscribe([this](auto event) {
+      round_switch_subscription_(round_switch_events.subscribe(
+          [this,
+           proposal_creation_strategy =
+               std::move(proposal_creation_strategy)](auto event) {
             log_->debug("Current: {}", event.next_round);
 
             // notify our ordering service about new round
+            proposal_creation_strategy->onCollaborationOutcome(
+                event.next_round, event.ledger_state->ledger_peers.size());
             ordering_service_->onCollaborationOutcome(event.next_round);
 
             this->sendCachedTransactions();
@@ -93,7 +98,8 @@ OnDemandOrderingGate::processProposalRequest(
   if (not proposal) {
     return boost::none;
   }
-  auto proposal_without_replays = removeReplays(*std::move(proposal));
+  auto proposal_without_replays =
+      removeReplaysAndDuplicates(*std::move(proposal));
   // no need to check empty proposal
   if (boost::empty(proposal_without_replays->transactions())) {
     return boost::none;
@@ -126,7 +132,7 @@ void OnDemandOrderingGate::sendCachedTransactions() {
 }
 
 std::shared_ptr<const shared_model::interface::Proposal>
-OnDemandOrderingGate::removeReplays(
+OnDemandOrderingGate::removeReplaysAndDuplicates(
     std::shared_ptr<const shared_model::interface::Proposal> proposal) const {
   std::vector<bool> proposal_txs_validation_results;
   auto tx_is_not_processed = [this](const auto &tx) {
@@ -147,19 +153,33 @@ OnDemandOrderingGate::removeReplays(
         });
   };
 
+  std::unordered_set<std::string> hashes;
+  auto tx_is_unique = [&hashes](const auto &tx) {
+    auto tx_hash = tx.hash().hex();
+
+    if (hashes.count(tx_hash)) {
+      return false;
+    } else {
+      hashes.insert(tx_hash);
+      return true;
+    }
+  };
+
   shared_model::interface::TransactionBatchParserImpl batch_parser;
 
-  bool has_replays = false;
+  bool has_invalid_txs = false;
   auto batches = batch_parser.parseBatches(proposal->transactions());
   for (auto &batch : batches) {
-    bool all_txs_are_new =
-        std::all_of(batch.begin(), batch.end(), tx_is_not_processed);
+    bool txs_are_valid =
+        std::all_of(batch.begin(), batch.end(), [&](const auto &tx) {
+          return tx_is_not_processed(tx) and tx_is_unique(tx);
+        });
     proposal_txs_validation_results.insert(
-        proposal_txs_validation_results.end(), batch.size(), all_txs_are_new);
-    has_replays |= not all_txs_are_new;
+        proposal_txs_validation_results.end(), batch.size(), txs_are_valid);
+    has_invalid_txs |= not txs_are_valid;
   }
 
-  if (not has_replays) {
+  if (not has_invalid_txs) {
     return std::move(proposal);
   }
 
