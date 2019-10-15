@@ -15,6 +15,7 @@
 #include "consensus/yac/storage/buffered_cleanup_strategy.hpp"
 #include "consensus/yac/storage/yac_proposal_storage.hpp"
 #include "consensus/yac/transport/impl/network_impl.hpp"
+#include "consensus/yac/yac.hpp"
 #include "logger/logger_manager.hpp"
 #include "network/impl/grpc_channel_builder.hpp"
 
@@ -84,6 +85,8 @@ namespace iroha {
           Round initial_round,
           std::shared_ptr<iroha::ametsuchi::PeerQueryFactory>
               peer_query_factory,
+          boost::optional<shared_model::interface::types::PeerList>
+              alternative_peers,
           std::shared_ptr<simulator::BlockCreator> block_creator,
           std::shared_ptr<network::BlockLoader> block_loader,
           const shared_model::crypto::Keypair &keypair,
@@ -123,6 +126,8 @@ namespace iroha {
         return std::make_shared<YacGateImpl>(
             std::move(yac),
             std::move(peer_orderer),
+            alternative_peers |
+                [](auto &peers) { return ClusterOrdering::create(peers); },
             hash_provider,
             block_creator,
             std::move(consensus_result_cache),

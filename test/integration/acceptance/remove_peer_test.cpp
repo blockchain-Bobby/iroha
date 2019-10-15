@@ -5,11 +5,19 @@
 
 #include "integration/acceptance/fake_peer_fixture.hpp"
 
+#include <rxcpp/operators/rx-filter.hpp>
+#include <rxcpp/operators/rx-observe_on.hpp>
+#include <rxcpp/operators/rx-replay.hpp>
+#include <rxcpp/operators/rx-take.hpp>
+#include <rxcpp/operators/rx-timeout.hpp>
+#include "ametsuchi/block_query.hpp"
 #include "builders/protobuf/transaction.hpp"
 #include "consensus/yac/vote_message.hpp"
 #include "consensus/yac/yac_hash_provider.hpp"
 #include "framework/integration_framework/fake_peer/behaviour/honest.hpp"
 #include "framework/integration_framework/fake_peer/block_storage.hpp"
+#include "framework/integration_framework/iroha_instance.hpp"
+#include "framework/integration_framework/test_irohad.hpp"
 #include "framework/test_logger.hpp"
 #include "module/shared_model/builders/protobuf/block.hpp"
 #include "ordering/impl/on_demand_common.cpp"

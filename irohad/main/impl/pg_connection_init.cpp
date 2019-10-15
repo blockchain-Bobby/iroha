@@ -244,6 +244,7 @@ CREATE TABLE IF NOT EXISTS account_has_signatory (
 CREATE TABLE IF NOT EXISTS peer (
     public_key varchar NOT NULL,
     address character varying(261) NOT NULL UNIQUE,
+    tls_certificate varchar,
     PRIMARY KEY (public_key)
 );
 CREATE TABLE IF NOT EXISTS asset (
@@ -303,10 +304,15 @@ CREATE TABLE IF NOT EXISTS position_by_account_asset (
     index bigint
 );
 CREATE INDEX IF NOT EXISTS position_by_account_asset_index
-  ON position_by_account_asset
-  USING btree
-  (account_id, asset_id, height, index ASC);
-  )";
+    ON position_by_account_asset
+    USING btree
+    (account_id, asset_id, height, index ASC);
+CREATE TABLE IF NOT EXISTS setting(
+    setting_key text,
+    setting_value text,
+    PRIMARY KEY (setting_key)
+);)";
+
   session << prepare_tables_sql;
 }
 
@@ -329,6 +335,7 @@ iroha::expected::Result<void, std::string> PgConnectionInit::resetWsv(
       TRUNCATE TABLE tx_status_by_hash RESTART IDENTITY CASCADE;
       TRUNCATE TABLE tx_position_by_creator RESTART IDENTITY CASCADE;
       TRUNCATE TABLE position_by_account_asset RESTART IDENTITY CASCADE;
+      TRUNCATE TABLE setting RESTART IDENTITY CASCADE;
     )";
     sql << reset;
   } catch (std::exception &e) {

@@ -9,6 +9,7 @@
 #include "ametsuchi/storage.hpp"
 
 #include <gmock/gmock.h>
+#include <rxcpp/rx-lite.hpp>
 #include "ametsuchi/block_storage_factory.hpp"
 #include "ametsuchi/mutable_storage.hpp"
 #include "ametsuchi/temporary_wsv.hpp"
@@ -33,6 +34,8 @@ namespace iroha {
                          boost::optional<std::shared_ptr<PeerQuery>>());
       MOCK_CONST_METHOD0(createBlockQuery,
                          boost::optional<std::shared_ptr<BlockQuery>>());
+      MOCK_CONST_METHOD0(createSettingQuery,
+                         boost::optional<std::unique_ptr<SettingQuery>>());
       MOCK_CONST_METHOD2(
           createQueryExecutor,
           boost::optional<std::shared_ptr<QueryExecutor>>(

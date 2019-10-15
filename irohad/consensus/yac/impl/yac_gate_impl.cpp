@@ -6,6 +6,7 @@
 #include "consensus/yac/impl/yac_gate_impl.hpp"
 
 #include <boost/range/adaptor/transformed.hpp>
+#include <rxcpp/operators/rx-flat_map.hpp>
 #include "common/visitor.hpp"
 #include "consensus/yac/cluster_order.hpp"
 #include "consensus/yac/outcome_messages.hpp"
@@ -18,6 +19,17 @@
 #include "logger/logger.hpp"
 #include "simulator/block_creator.hpp"
 
+namespace {
+  auto getPublicKeys(
+      const std::vector<iroha::consensus::yac::VoteMessage> &votes) {
+    return boost::copy_range<
+        shared_model::interface::types::PublicKeyCollectionType>(
+        votes | boost::adaptors::transformed([](auto &vote) {
+          return vote.signature->publicKey();
+        }));
+  }
+}  // namespace
+
 namespace iroha {
   namespace consensus {
     namespace yac {
@@ -25,6 +37,7 @@ namespace iroha {
       YacGateImpl::YacGateImpl(
           std::shared_ptr<HashGate> hash_gate,
           std::shared_ptr<YacPeerOrderer> orderer,
+          boost::optional<ClusterOrdering> alternative_order,
           std::shared_ptr<YacHashProvider> hash_provider,
           std::shared_ptr<simulator::BlockCreator> block_creator,
           std::shared_ptr<consensus::ConsensusResultCache>
@@ -32,6 +45,7 @@ namespace iroha {
           logger::LoggerPtr log)
           : log_(std::move(log)),
             current_hash_(),
+            alternative_order_(std::move(alternative_order)),
             published_events_(hash_gate->onOutcome()
                                   .flat_map([this](auto message) {
                                     return visit_in_place(
@@ -41,6 +55,9 @@ namespace iroha {
                                         },
                                         [this](const RejectMessage &msg) {
                                           return this->handleReject(msg);
+                                        },
+                                        [this](const FutureMessage &msg) {
+                                          return this->handleFuture(msg);
                                         });
                                   })
                                   .publish()
@@ -50,10 +67,8 @@ namespace iroha {
             block_creator_(std::move(block_creator)),
             consensus_result_cache_(std::move(consensus_result_cache)),
             hash_gate_(std::move(hash_gate)) {
-        block_creator_->onBlock().subscribe([this](const auto &event) {
-          current_ledger_state_ = event.ledger_state;
-          this->vote(event);
-        });
+        block_creator_->onBlock().subscribe(
+            [this](const auto &event) { this->vote(event); });
       }
 
       void YacGateImpl::vote(const simulator::BlockCreatorEvent &event) {
@@ -66,7 +81,10 @@ namespace iroha {
           return;
         }
 
+        current_ledger_state_ = event.ledger_state;
         current_hash_ = hash_provider_->makeHash(event);
+        assert(current_hash_.vote_round.block_round
+               == current_ledger_state_->top_block_info.height + 1);
 
         if (not event.round_data) {
           current_block_ = boost::none;
@@ -92,7 +110,8 @@ namespace iroha {
           return;
         }
 
-        hash_gate_->vote(current_hash_, *order);
+        hash_gate_->vote(current_hash_, *order, std::move(alternative_order_));
+        alternative_order_.reset();
       }
 
       rxcpp::observable<YacGateImpl::GateObject> YacGateImpl::onOutcome() {
@@ -118,6 +137,9 @@ namespace iroha {
           return rxcpp::observable<>::empty<GateObject>();
         }
 
+        assert(hash.vote_round.block_round
+               == current_hash_.vote_round.block_round);
+
         if (hash == current_hash_ and current_block_) {
           // if node has voted for the committed block
           // append signatures of other nodes
@@ -130,11 +152,7 @@ namespace iroha {
               current_hash_.vote_round, current_ledger_state_, block));
         }
 
-        auto public_keys = boost::copy_range<
-            shared_model::interface::types::PublicKeyCollectionType>(
-            msg.votes | boost::adaptors::transformed([](auto &vote) {
-              return vote.signature->publicKey();
-            }));
+        auto public_keys = getPublicKeys(msg.votes);
 
         if (hash.vote_hashes.proposal_hash.empty()) {
           // if consensus agreed on nothing for commit
@@ -157,11 +175,7 @@ namespace iroha {
       rxcpp::observable<YacGateImpl::GateObject> YacGateImpl::handleReject(
           const RejectMessage &msg) {
         const auto hash = getHash(msg.votes).value();
-        auto public_keys = boost::copy_range<
-            shared_model::interface::types::PublicKeyCollectionType>(
-            msg.votes | boost::adaptors::transformed([](auto &vote) {
-              return vote.signature->publicKey();
-            }));
+        auto public_keys = getPublicKeys(msg.votes);
         if (hash.vote_round < current_hash_.vote_round) {
           log_->info(
               "Current round {} is greater than reject round {}, skipped",
@@ -169,6 +183,9 @@ namespace iroha {
               hash.vote_round);
           return rxcpp::observable<>::empty<GateObject>();
         }
+
+        assert(hash.vote_round.block_round
+               == current_hash_.vote_round.block_round);
 
         auto has_same_proposals =
             std::all_of(std::next(msg.votes.begin()),
@@ -184,6 +201,28 @@ namespace iroha {
         }
         log_->info("Block reject since proposal hashes match");
         return rxcpp::observable<>::just<GateObject>(BlockReject(
+            hash.vote_round, current_ledger_state_, std::move(public_keys)));
+      }
+
+      rxcpp::observable<YacGateImpl::GateObject> YacGateImpl::handleFuture(
+          const FutureMessage &msg) {
+        const auto hash = getHash(msg.votes).value();
+        auto public_keys = getPublicKeys(msg.votes);
+        if (hash.vote_round.block_round
+            <= current_hash_.vote_round.block_round) {
+          log_->info(
+              "Current block round {} is not lower than future block round {}, "
+              "skipped",
+              current_hash_.vote_round.block_round,
+              hash.vote_round.block_round);
+          return rxcpp::observable<>::empty<GateObject>();
+        }
+
+        assert(hash.vote_round.block_round
+               > current_hash_.vote_round.block_round);
+
+        log_->info("Message from future, waiting for sync");
+        return rxcpp::observable<>::just<GateObject>(Future(
             hash.vote_round, current_ledger_state_, std::move(public_keys)));
       }
     }  // namespace yac

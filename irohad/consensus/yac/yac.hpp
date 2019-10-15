@@ -13,11 +13,13 @@
 #include <mutex>
 
 #include <boost/optional.hpp>
-#include <rxcpp/rx.hpp>
+#include <rxcpp/rx-lite.hpp>
 #include "consensus/yac/cluster_order.hpp"     //  for ClusterOrdering
 #include "consensus/yac/outcome_messages.hpp"  // because messages passed by value
 #include "consensus/yac/storage/yac_vote_storage.hpp"  // for VoteStorage
 #include "logger/logger_fwd.hpp"
+
+#include <rxcpp/operators/rx-observe_on.hpp>
 
 namespace iroha {
   namespace consensus {
@@ -55,7 +57,10 @@ namespace iroha {
 
         // ------|Hash gate|------
 
-        void vote(YacHash hash, ClusterOrdering order) override;
+        void vote(YacHash hash,
+                  ClusterOrdering order,
+                  boost::optional<ClusterOrdering> alternative_order =
+                      boost::none) override;
 
         rxcpp::observable<Answer> onOutcome() override;
 
@@ -77,6 +82,9 @@ namespace iroha {
          */
         void closeRound();
 
+        /// Get cluster_order_ or alternative_order_ if present
+        ClusterOrdering &getCurrentOrder();
+
         /**
          * Find corresponding peer in the ledger from vote message
          * @param vote message containing peer information
@@ -86,7 +94,8 @@ namespace iroha {
         findPeer(const VoteMessage &vote);
 
         /// Remove votes from unknown peers from given vector.
-        void removeUnknownPeersVotes(std::vector<VoteMessage> &votes);
+        void removeUnknownPeersVotes(std::vector<VoteMessage> &votes,
+                                     ClusterOrdering &order);
 
         // ------|Apply data|------
         /**
@@ -109,6 +118,7 @@ namespace iroha {
 
         // ------|One round|------
         ClusterOrdering cluster_order_;
+        boost::optional<ClusterOrdering> alternative_order_;
         Round round_;
 
         // ------|Fields|------

@@ -18,6 +18,13 @@ target_link_libraries(wsv_query_command_test
     test_logger
     )
 
+addtest(wsv_query_test wsv_query_test.cpp)
+target_link_libraries(wsv_query_test
+        ametsuchi
+        ametsuchi_fixture
+        test_logger
+        )
+
 addtest(flat_file_test flat_file_test.cpp)
 target_link_libraries(flat_file_test
     ametsuchi
@@ -75,6 +82,14 @@ target_link_libraries(tx_presence_cache_test
     shared_model_interfaces_factories
     )
 
+addtest(settings_test settings_test.cpp)
+target_link_libraries(settings_test
+        ametsuchi
+        ametsuchi_fixture
+        test_logger
+        commands_mocks_factory
+        )
+
 addtest(in_memory_block_storage_test in_memory_block_storage_test.cpp)
 target_link_libraries(in_memory_block_storage_test
     ametsuchi
@@ -108,5 +123,10 @@ target_link_libraries(ametsuchi_fixture INTERFACE
 
 addtest(k_times_reconnection_strategy_test k_times_reconnection_strategy_test.cpp)
 target_link_libraries(k_times_reconnection_strategy_test
+    ametsuchi
+    )
+
+addtest(peer_query_wsv_test peer_query_wsv_test.cpp)
+target_link_libraries(peer_query_wsv_test
     ametsuchi
     )

@@ -223,10 +223,23 @@ namespace iroha {
         address =
             std::make_unique<shared_model::interface::types::AddressType>("");
         pk = std::make_unique<shared_model::interface::types::PubkeyType>("");
+        tls_certificate = std::make_unique<boost::optional<
+            shared_model::interface::types::TLSCertificateType>>("");
+        blank_tls_certificate = std::make_unique<boost::optional<
+            shared_model::interface::types::TLSCertificateType>>();
         peer = std::make_unique<MockPeer>();
         EXPECT_CALL(*peer, address())
             .WillRepeatedly(testing::ReturnRef(*address));
         EXPECT_CALL(*peer, pubkey()).WillRepeatedly(testing::ReturnRef(*pk));
+        EXPECT_CALL(*peer, tlsCertificate())
+            .WillRepeatedly(testing::ReturnRef(*blank_tls_certificate));
+        peer_with_cert = std::make_unique<MockPeer>();
+        EXPECT_CALL(*peer_with_cert, address())
+            .WillRepeatedly(testing::ReturnRef(*address));
+        EXPECT_CALL(*peer_with_cert, pubkey())
+            .WillRepeatedly(testing::ReturnRef(*pk));
+        EXPECT_CALL(*peer_with_cert, tlsCertificate())
+            .WillRepeatedly(testing::ReturnRef(*tls_certificate));
         createDefaultRole();
         createDefaultDomain();
         createDefaultAccount();
@@ -234,7 +247,14 @@ namespace iroha {
 
       std::unique_ptr<shared_model::interface::types::AddressType> address;
       std::unique_ptr<shared_model::interface::types::PubkeyType> pk;
+      std::unique_ptr<
+          boost::optional<shared_model::interface::types::TLSCertificateType>>
+          blank_tls_certificate;
+      std::unique_ptr<
+          boost::optional<shared_model::interface::types::TLSCertificateType>>
+          tls_certificate;
       std::unique_ptr<MockPeer> peer;
+      std::unique_ptr<MockPeer> peer_with_cert;
     };
 
     /**
@@ -243,6 +263,17 @@ namespace iroha {
      * @then peer is successfully added
      */
     TEST_F(AddPeer, Valid) {
+      addAllPerms();
+      CHECK_SUCCESSFUL_RESULT(
+          execute(*mock_command_factory->constructAddPeer(*peer_with_cert)));
+    }
+
+    /**
+     * @given command
+     * @when trying to add peer with a TLS cert
+     * @then peer is successfully added
+     */
+    TEST_F(AddPeer, ValidWithCertificate) {
       addAllPerms();
       CHECK_SUCCESSFUL_RESULT(
           execute(*mock_command_factory->constructAddPeer(*peer)));
@@ -2288,6 +2319,49 @@ namespace iroha {
       auto kv = sql_query->getAccountDetail(account_id);
       ASSERT_TRUE(kv);
       ASSERT_EQ(kv.get(), R"({"id@domain": {"key": "value"}})");
+    }
+
+    class SetSettingValueTest : public CommandExecutorTest {};
+
+    /**
+     * @given command
+     * @when trying to insert the setting value by the key
+     * @then record with the key has the value
+     */
+    TEST_F(SetSettingValueTest, InsertSettingValue) {
+      std::string key = "maxDesc";
+      std::string value = "255";
+      CHECK_SUCCESSFUL_RESULT(execute(
+          *mock_command_factory->constructSetSettingValue(key, value), true));
+
+      auto setting_value = sql_query->getSettingValue(key);
+      ASSERT_TRUE(setting_value);
+      ASSERT_EQ(setting_value.get(), value);
+    }
+
+    /**
+     * @given command
+     * @when trying to update the setting value by the key
+     * @then record with the key has the new value
+     */
+    TEST_F(SetSettingValueTest, UpdateSettingValue) {
+      std::string key = "maxDesc";
+      std::string value = "255";
+      CHECK_SUCCESSFUL_RESULT(execute(
+          *mock_command_factory->constructSetSettingValue(key, value), true));
+
+      auto setting_value = sql_query->getSettingValue(key);
+      ASSERT_TRUE(setting_value);
+      ASSERT_EQ(setting_value.get(), value);
+
+      value = "512";
+      ASSERT_NE(setting_value.get(), value);
+      CHECK_SUCCESSFUL_RESULT(execute(
+          *mock_command_factory->constructSetSettingValue(key, value), true));
+
+      setting_value = sql_query->getSettingValue(key);
+      ASSERT_TRUE(setting_value);
+      ASSERT_EQ(setting_value.get(), value);
     }
 
   }  // namespace ametsuchi

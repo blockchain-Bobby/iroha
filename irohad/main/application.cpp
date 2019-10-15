@@ -6,7 +6,7 @@
 #include "main/application.hpp"
 
 #include <boost/filesystem.hpp>
-
+#include <rxcpp/operators/rx-map.hpp>
 #include "ametsuchi/impl/flat_file_block_storage.hpp"
 #include "ametsuchi/impl/k_times_reconnection_strategy.hpp"
 #include "ametsuchi/impl/pool_wrapper.hpp"
@@ -41,6 +41,7 @@
 #include "multi_sig_transactions/transport/mst_transport_stub.hpp"
 #include "network/impl/block_loader_impl.hpp"
 #include "network/impl/peer_communication_service_impl.hpp"
+#include "network/impl/tls_credentials.hpp"
 #include "ordering/impl/kick_out_proposal_creation_strategy.hpp"
 #include "ordering/impl/on_demand_common.hpp"
 #include "ordering/impl/on_demand_ordering_gate.hpp"
@@ -76,29 +77,31 @@ using namespace std::chrono_literals;
 
 /// Consensus consistency model type.
 static constexpr iroha::consensus::yac::ConsistencyModel
-    kConsensusConsistencyModel = iroha::consensus::yac::ConsistencyModel::kBft;
+    kConsensusConsistencyModel = iroha::consensus::yac::ConsistencyModel::kCft;
 
 /**
  * Configuring iroha daemon
  */
-Irohad::Irohad(const boost::optional<std::string> &block_store_dir,
-               std::unique_ptr<ametsuchi::PostgresOptions> pg_opt,
-               const std::string &listen_ip,
-               size_t torii_port,
-               size_t internal_port,
-               size_t max_proposal_size,
-               std::chrono::milliseconds proposal_delay,
-               std::chrono::milliseconds vote_delay,
-               std::chrono::minutes mst_expiration_time,
-               const shared_model::crypto::Keypair &keypair,
-               std::chrono::milliseconds max_rounds_delay,
-               size_t stale_stream_max_rounds,
-               boost::optional<shared_model::interface::types::PeerList>
-                   opt_alternative_peers,
-               logger::LoggerManagerTreePtr logger_manager,
-               const boost::optional<GossipPropagationStrategyParams>
-                   &opt_mst_gossip_params,
-               const boost::optional<iroha::torii::TlsParams> &torii_tls_params)
+Irohad::Irohad(
+    const boost::optional<std::string> &block_store_dir,
+    std::unique_ptr<ametsuchi::PostgresOptions> pg_opt,
+    const std::string &listen_ip,
+    size_t torii_port,
+    size_t internal_port,
+    size_t max_proposal_size,
+    std::chrono::milliseconds proposal_delay,
+    std::chrono::milliseconds vote_delay,
+    std::chrono::minutes mst_expiration_time,
+    const shared_model::crypto::Keypair &keypair,
+    std::chrono::milliseconds max_rounds_delay,
+    size_t stale_stream_max_rounds,
+    boost::optional<shared_model::interface::types::PeerList>
+        opt_alternative_peers,
+    logger::LoggerManagerTreePtr logger_manager,
+    const boost::optional<GossipPropagationStrategyParams>
+        &opt_mst_gossip_params,
+    const boost::optional<iroha::torii::TlsParams> &torii_tls_params,
+    boost::optional<IrohadConfig::InterPeerTls> inter_peer_tls_config)
     : block_store_dir_(block_store_dir),
       listen_ip_(listen_ip),
       torii_port_(torii_port),
@@ -113,6 +116,7 @@ Irohad::Irohad(const boost::optional<std::string> &block_store_dir,
       stale_stream_max_rounds_(stale_stream_max_rounds),
       opt_alternative_peers_(std::move(opt_alternative_peers)),
       opt_mst_gossip_params_(opt_mst_gossip_params),
+      inter_peer_tls_config_(std::move(inter_peer_tls_config)),
       pending_txs_storage_init(
           std::make_unique<PendingTransactionStorageInit>()),
       keypair(keypair),
@@ -122,15 +126,6 @@ Irohad::Irohad(const boost::optional<std::string> &block_store_dir,
       log_manager_(std::move(logger_manager)),
       log_(log_manager_->getLogger()) {
   log_->info("created");
-  validators_config_ =
-      std::make_shared<shared_model::validation::ValidatorsConfig>(
-          max_proposal_size_);
-  block_validators_config_ =
-      std::make_shared<shared_model::validation::ValidatorsConfig>(
-          max_proposal_size_, true);
-  proposal_validators_config_ =
-      std::make_shared<shared_model::validation::ValidatorsConfig>(
-          max_proposal_size_, false, true);
   // TODO: rework in a more C++11+ - ish way luckychess 29.06.2019 IR-575
   std::srand(std::time(0));
   // Initializing storage at this point in order to insert genesis block before
@@ -152,19 +147,14 @@ Irohad::~Irohad() {
  * Initializing iroha daemon
  */
 Irohad::RunResult Irohad::init() {
-  auto peers_updater = [&]() -> RunResult {
-    if (opt_alternative_peers_) {
-      return resetPeers(*opt_alternative_peers_);
-    } else {
-      return {};
-    }
-  };
-
   // clang-format off
-  return initWsvRestorer() // Recover WSV from the existing ledger
-                           // to be sure it is consistent
+  return initSettings()
+  | [this]{ return initValidatorsConfigs();}
+  | [this]{ return initWsvRestorer(); // Recover WSV from the existing ledger
+                                      // to be sure it is consistent
+  }
   | [this]{ return restoreWsv();}
-  | peers_updater
+  | [this]{ return initTlsCredentials();}
   | [this]{ return initCryptoProvider();}
   | [this]{ return initBatchParser();}
   | [this]{ return initValidators();}
@@ -195,6 +185,40 @@ void Irohad::dropStorage() {
 }
 
 /**
+ * Initializing setting query
+ */
+Irohad::RunResult Irohad::initSettings() {
+  auto settingsQuery = storage->createSettingQuery();
+  if (not settingsQuery) {
+    return expected::makeError("Unable to create Settings");
+  }
+
+  return settingsQuery.get()->get() | [this](auto &&settings) -> RunResult {
+    this->settings_ = std::move(settings);
+
+    log_->info("[Init] => settings");
+    return {};
+  };
+}
+
+/**
+ * Initializing validators' configs
+ */
+Irohad::RunResult Irohad::initValidatorsConfigs() {
+  validators_config_ =
+      std::make_shared<shared_model::validation::ValidatorsConfig>(
+          max_proposal_size_, settings_);
+  block_validators_config_ =
+      std::make_shared<shared_model::validation::ValidatorsConfig>(
+          max_proposal_size_, settings_, true);
+  proposal_validators_config_ =
+      std::make_shared<shared_model::validation::ValidatorsConfig>(
+          max_proposal_size_, settings_, false, true);
+  log_->info("[Init] => validators configs");
+  return {};
+}
+
+/**
  * Initializing iroha daemon storage
  */
 Irohad::RunResult Irohad::initStorage(
@@ -208,7 +232,7 @@ Irohad::RunResult Irohad::initStorage(
   auto block_transport_factory =
       std::make_shared<shared_model::proto::ProtoBlockFactory>(
           std::make_unique<shared_model::validation::AlwaysValidValidator<
-              shared_model::interface::Block>>(block_validators_config_),
+              shared_model::interface::Block>>(),
           std::make_unique<shared_model::validation::ProtoBlockValidator>());
 
   boost::optional<std::string> string_res = boost::none;
@@ -297,17 +321,36 @@ Irohad::RunResult Irohad::restoreWsv() {
   };
 }
 
-Irohad::RunResult Irohad::resetPeers(
-    const shared_model::interface::types::PeerList &alternative_peers) {
-  storage->resetPeers();
+/**
+ * Initializing own TLS credentials.
+ */
+Irohad::RunResult Irohad::initTlsCredentials() {
+  const auto &p2p_path = inter_peer_tls_config_ |
+      [](const auto &p2p_config) { return p2p_config.my_tls_creds_path; };
+  const auto &torii_path = torii_tls_params_ | [](const auto &torii_config) {
+    return boost::make_optional(torii_config.key_path);
+  };
 
-  for (const auto &peer : alternative_peers) {
-    auto result = storage->insertPeer(*peer);
-    if (boost::get<expected::Error<std::string>>(&result)) {
-      return result;
+  auto load_tls_creds = [this](const auto &opt_path,
+                               const auto &description,
+                               auto &destination) -> RunResult {
+    if (opt_path) {
+      return TlsCredentials::load(opt_path.value()) |
+                 [&](auto &&tls_creds) -> RunResult {
+        destination = std::move(tls_creds);
+        return {};
+        log_->debug("Loaded my {} TLS credentials from '{}'.",
+                    description,
+                    opt_path.value());
+      };
     }
-  }
-  return {};
+    return {};
+  };
+
+  return load_tls_creds(p2p_path, "inter peer", my_inter_peer_tls_creds_) |
+      [&, this] {
+        return load_tls_creds(torii_path, "torii", this->torii_tls_creds_);
+      };
 }
 
 /**
@@ -528,7 +571,7 @@ Irohad::RunResult Irohad::initOrderingGate() {
                                      delay,
                                      log_manager_->getChild("Ordering"));
   log_->info("[Init] => init ordering gate - [{}]",
-             logger::logBool(ordering_gate));
+             logger::boolRepr(bool(ordering_gate)));
   return {};
 }
 
@@ -611,6 +654,7 @@ Irohad::RunResult Irohad::initConsensusGate() {
   consensus_gate = yac_init->initConsensusGate(
       {block->height(), ordering::kFirstRejectRound},
       storage,
+      opt_alternative_peers_,
       simulator,
       block_loader,
       keypair,
@@ -841,27 +885,20 @@ Irohad::RunResult Irohad::run() {
       | make_port_logger("Torii");
 
   // Run torii TLS server
-  if (torii_tls_params_) {
-    auto tls_keypair =
-        TlsKeypairFactory().readFromFiles(torii_tls_params_->key_path);
-    if (not tls_keypair) {
-      return expected::makeError("Failed to read TLS keypair from "
-                                 + torii_tls_params_->key_path);
-    }
-
+  torii_tls_creds_ | [&, this](const auto &tls_creds) {
     run_result |= [&, this] {
       torii_tls_server = std::make_unique<ServerRunner>(
           listen_ip_ + ":" + std::to_string(torii_tls_params_->port),
           log_manager_->getChild("ToriiTlsServerRunner")->getLogger(),
           false,
-          tls_keypair);
+          tls_creds);
       return (*torii_tls_server)
                  ->append(command_service_transport)
                  .append(query_service)
                  .run()
           | make_port_logger("Torii TLS");
     };
-  }
+  };
 
   // Run internal server
   run_result |= [&, this] {

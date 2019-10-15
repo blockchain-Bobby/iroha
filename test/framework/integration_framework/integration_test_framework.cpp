@@ -10,6 +10,10 @@
 
 #include <boost/assert.hpp>
 #include <boost/thread/barrier.hpp>
+#include <rxcpp/operators/rx-filter.hpp>
+#include <rxcpp/operators/rx-flat_map.hpp>
+#include <rxcpp/operators/rx-take.hpp>
+#include <rxcpp/operators/rx-zip.hpp>
 #include "ametsuchi/storage.hpp"
 #include "backend/protobuf/block.hpp"
 #include "backend/protobuf/common_objects/proto_common_objects_factory.hpp"
@@ -24,6 +28,7 @@
 #include "cryptography/crypto_provider/crypto_defaults.hpp"
 #include "cryptography/default_hash_provider.hpp"
 #include "datetime/time.hpp"
+#include "endpoint.grpc.pb.h"
 #include "framework/common_constants.hpp"
 #include "framework/integration_framework/fake_peer/behaviour/honest.hpp"
 #include "framework/integration_framework/fake_peer/fake_peer.hpp"
@@ -49,6 +54,8 @@
 #include "network/impl/grpc_channel_builder.hpp"
 #include "ordering/impl/on_demand_os_client_grpc.hpp"
 #include "synchronizer/synchronizer_common.hpp"
+#include "torii/command_client.hpp"
+#include "torii/query_client.hpp"
 #include "torii/status_bus.hpp"
 #include "validators/protobuf/proto_proposal_validator.hpp"
 
@@ -157,11 +164,12 @@ namespace integration_framework {
                                             log_manager_->getChild("Irohad"),
                                             log_,
                                             dbname)),
-        command_client_(
+        command_client_(std::make_unique<torii::CommandSyncClient>(
             iroha::network::createClient<iroha::protocol::CommandService_v1>(
                 format_address(kLocalHost, torii_port_)),
-            log_manager_->getChild("CommandClient")->getLogger()),
-        query_client_(kLocalHost, torii_port_),
+            log_manager_->getChild("CommandClient")->getLogger())),
+        query_client_(std::make_unique<torii_utils::QuerySyncClient>(
+            kLocalHost, torii_port_)),
         async_call_(std::make_shared<AsyncCall>(
             log_manager_->getChild("AsyncCall")->getLogger())),
         tx_response_waiting(tx_response_waiting),
@@ -477,7 +485,7 @@ namespace integration_framework {
     iroha::protocol::TxStatusRequest request;
     request.set_tx_hash(hash.hex());
     iroha::protocol::ToriiResponse response;
-    command_client_.Status(request, response);
+    command_client_->Status(request, response);
     validation(shared_model::proto::TransactionResponse(std::move(response)));
     return *this;
   }
@@ -487,7 +495,7 @@ namespace integration_framework {
     log_->info("sending transaction");
     log_->debug("{}", tx);
 
-    command_client_.Torii(tx.getTransport());
+    command_client_->Torii(tx.getTransport());
     return *this;
   }
 
@@ -601,7 +609,7 @@ namespace integration_framework {
               ->getTransport();
       *tx_list.add_transactions() = proto_tx;
     }
-    command_client_.ListTorii(tx_list);
+    command_client_->ListTorii(tx_list);
 
     std::unique_lock<std::mutex> lk(m);
     cv.wait(lk, [&] { return processed; });
@@ -628,7 +636,7 @@ namespace integration_framework {
     log_->debug("{}", qry);
 
     iroha::protocol::QueryResponse response;
-    query_client_.Find(qry.getTransport(), response);
+    query_client_->Find(qry.getTransport(), response);
     shared_model::proto::QueryResponse query_response{std::move(response)};
 
     validation(query_response);

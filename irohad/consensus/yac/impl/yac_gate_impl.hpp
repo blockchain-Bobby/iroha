@@ -10,6 +10,7 @@
 
 #include <memory>
 
+#include <rxcpp/rx-lite.hpp>
 #include "consensus/consensus_block_cache.hpp"
 #include "consensus/yac/yac_hash_provider.hpp"
 #include "logger/logger_fwd.hpp"
@@ -34,6 +35,7 @@ namespace iroha {
        public:
         YacGateImpl(std::shared_ptr<HashGate> hash_gate,
                     std::shared_ptr<YacPeerOrderer> orderer,
+                    boost::optional<ClusterOrdering> alternative_order,
                     std::shared_ptr<YacHashProvider> hash_provider,
                     std::shared_ptr<simulator::BlockCreator> block_creator,
                     std::shared_ptr<consensus::ConsensusResultCache>
@@ -52,12 +54,14 @@ namespace iroha {
 
         rxcpp::observable<GateObject> handleCommit(const CommitMessage &msg);
         rxcpp::observable<GateObject> handleReject(const RejectMessage &msg);
+        rxcpp::observable<GateObject> handleFuture(const FutureMessage &msg);
 
         logger::LoggerPtr log_;
 
         boost::optional<std::shared_ptr<shared_model::interface::Block>>
             current_block_;
         YacHash current_hash_;
+        boost::optional<ClusterOrdering> alternative_order_;
         std::shared_ptr<const LedgerState> current_ledger_state_;
 
         rxcpp::observable<GateObject> published_events_;

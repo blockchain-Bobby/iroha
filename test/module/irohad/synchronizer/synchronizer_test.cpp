@@ -253,6 +253,7 @@ TEST_F(SynchronizerTest, ValidWhenSingleCommitSynchronized) {
 TEST_F(SynchronizerTest, ValidWhenValidChain) {
   DefaultValue<expected::Result<std::unique_ptr<MutableStorage>, std::string>>::
       SetFactory(&createMockMutableStorage);
+  consensus::Round round{kHeight, 1};
 
   EXPECT_CALL(*mutable_factory, createMutableStorage(_)).Times(1);
 
@@ -263,13 +264,14 @@ TEST_F(SynchronizerTest, ValidWhenValidChain) {
 
   auto wrapper =
       make_test_subscriber<CallExact>(synchronizer->on_commit_chain(), 1);
-  wrapper.subscribe([this](auto commit_event) {
+  wrapper.subscribe([this, round](auto commit_event) {
     EXPECT_EQ(this->ledger_peers, commit_event.ledger_state->ledger_peers);
     ASSERT_EQ(commit_event.sync_outcome, SynchronizationOutcomeType::kCommit);
+    ASSERT_EQ(commit_event.round, round);
   });
 
-  gate_outcome.get_subscriber().on_next(consensus::VoteOther(
-      consensus::Round{kHeight, 1}, ledger_state, public_keys, hash));
+  gate_outcome.get_subscriber().on_next(
+      consensus::VoteOther(round, ledger_state, public_keys, hash));
 
   ASSERT_TRUE(wrapper.validate());
 }
@@ -349,35 +351,25 @@ TEST_F(SynchronizerTest, ExactlyThreeRetrievals) {
 
 /**
  * @given commit from the consensus and initialized components
- * @when synchronizer fails to download blocks more times than the peers amount
- * @then it will try until success
+ * @when synchronizer fails to download blocks from all the peers in the list
+ * @then no commit event is emitted
  */
 TEST_F(SynchronizerTest, RetrieveBlockSeveralFailures) {
-  const size_t number_of_failures{ledger_peers.size() + 2};
+  const size_t number_of_failures{ledger_peers.size()};
   DefaultValue<expected::Result<std::unique_ptr<MutableStorage>, std::string>>::
       SetFactory(&createMockMutableStorage);
   EXPECT_CALL(*mutable_factory, createMutableStorage(_))
-      .Times(number_of_failures + 1);
+      .Times(number_of_failures);
   EXPECT_CALL(*block_loader, retrieveBlocks(_, _))
       .WillRepeatedly(Return(rxcpp::observable<>::just(commit_message)));
 
-  // fail the chain validation two times so that synchronizer will try more
-  {
-    InSequence s;  // ensures the call order
-    EXPECT_CALL(*chain_validator,
-                validateAndApply(ChainEq({commit_message}), _))
-        .Times(number_of_failures)
-        .WillRepeatedly(Return(false));
-    EXPECT_CALL(*chain_validator,
-                validateAndApply(ChainEq({commit_message}), _))
-        .WillOnce(Return(true));
-  }
+  EXPECT_CALL(*chain_validator, validateAndApply(ChainEq({commit_message}), _))
+      .Times(number_of_failures)
+      .WillRepeatedly(Return(false));
 
   auto wrapper =
-      make_test_subscriber<CallExact>(synchronizer->on_commit_chain(), 1);
-  wrapper.subscribe([](auto commit_event) {
-    ASSERT_EQ(commit_event.sync_outcome, SynchronizationOutcomeType::kCommit);
-  });
+      make_test_subscriber<CallExact>(synchronizer->on_commit_chain(), 0);
+  wrapper.subscribe();
 
   gate_outcome.get_subscriber().on_next(consensus::VoteOther(
       consensus::Round{kHeight, 1}, ledger_state, public_keys, hash));
@@ -583,7 +575,7 @@ TEST_F(SynchronizerTest, CommitFailureVoteOther) {
 
 /**
  * @given Peers top block height is kHeight - 1
- * @when arrives AgreementOnNone with kHeight + 1 round
+ * @when arrives Future with kHeight + 1 round
  * @then synchronizer has to download missing block with height = kHeight
  */
 TEST_F(SynchronizerTest, OneRoundDifference) {
@@ -599,12 +591,15 @@ TEST_F(SynchronizerTest, OneRoundDifference) {
 
   auto wrapper =
       make_test_subscriber<CallExact>(synchronizer->on_commit_chain(), 1);
-  wrapper.subscribe([this](auto commit_event) {
+  wrapper.subscribe([this,
+                     expected_round = consensus::Round{commit_message->height(),
+                                                       0}](auto commit_event) {
     EXPECT_EQ(this->ledger_peers, commit_event.ledger_state->ledger_peers);
-    ASSERT_EQ(commit_event.sync_outcome, SynchronizationOutcomeType::kNothing);
+    ASSERT_EQ(commit_event.sync_outcome, SynchronizationOutcomeType::kCommit);
+    ASSERT_EQ(commit_event.round, expected_round);
   });
 
-  gate_outcome.get_subscriber().on_next(consensus::AgreementOnNone(
+  gate_outcome.get_subscriber().on_next(consensus::Future(
       consensus::Round{kHeight + 1, 1}, ledger_state, public_keys));
 
   ASSERT_TRUE(wrapper.validate());

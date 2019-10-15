@@ -6,6 +6,7 @@
 #include "ametsuchi/impl/mutable_storage_impl.hpp"
 
 #include <boost/variant/apply_visitor.hpp>
+#include <rxcpp/operators/rx-all.hpp>
 #include "ametsuchi/command_executor.hpp"
 #include "ametsuchi/impl/peer_query_wsv.hpp"
 #include "ametsuchi/impl/postgres_block_index.hpp"
@@ -47,8 +48,13 @@ namespace iroha {
         std::shared_ptr<const shared_model::interface::Block> block,
         MutableStoragePredicate predicate) {
       auto execute_transaction = [this](auto &transaction) -> bool {
-        return expected::hasValue(
-            transaction_executor_->execute(transaction, false));
+        auto result = transaction_executor_->execute(transaction, false);
+        auto error = expected::resultToOptionalError(result);
+        if (error) {
+          log_->error(error->command_error.toString());
+        }
+        auto ok = !error;
+        return ok;
       };
 
       log_->info("Applying block: height {}, hash {}",

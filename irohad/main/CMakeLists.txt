@@ -7,7 +7,6 @@ set(EXECUTABLE_OUTPUT_PATH ${PROJECT_BINARY_DIR}/bin)
 
 add_library(server_runner
     server_runner.cpp
-    tls_keypair.cpp
     )
 target_link_libraries(server_runner
     logger
@@ -48,6 +47,7 @@ add_library(application
     )
 target_link_libraries(application
     PRIVATE
+    tls_credentials
     yac
     yac_transport
     PUBLIC
@@ -94,11 +94,13 @@ add_library(iroha_conf_loader iroha_conf_loader.cpp)
 target_link_libraries(iroha_conf_loader
     iroha_conf_literals
     logger_manager
+    libs_files
     rapidjson
-)
+    )
 
 add_library(iroha_conf_literals iroha_conf_literals.cpp)
-add_dependencies(iroha_conf_literals logger)
-target_include_directories(iroha_conf_literals PUBLIC ${fmt_INCLUDE_DIR})
+target_link_libraries(iroha_conf_literals
+    logger
+    )
 
 add_install_step_for_bin(irohad)

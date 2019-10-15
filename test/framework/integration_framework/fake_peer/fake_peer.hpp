@@ -10,7 +10,7 @@
 #include <string>
 
 #include <boost/core/noncopyable.hpp>
-#include <rxcpp/rx.hpp>
+#include <rxcpp/rx-observable-fwd.hpp>
 #include "framework/integration_framework/fake_peer/network/mst_message.hpp"
 #include "framework/integration_framework/fake_peer/proposal_storage.hpp"
 #include "framework/integration_framework/fake_peer/types.hpp"
@@ -20,7 +20,11 @@
 #include "network/impl/async_grpc_client.hpp"
 #include "ordering/impl/on_demand_os_client_grpc.hpp"
 
-class ServerRunner;
+namespace iroha {
+  namespace network {
+    class ServerRunner;
+  }
+}  // namespace iroha
 
 namespace integration_framework {
   namespace fake_peer {
@@ -95,7 +99,7 @@ namespace integration_framework {
       ProposalStorage &getProposalStorage();
 
       /// Start the fake peer.
-      std::unique_ptr<ServerRunner> run();
+      std::unique_ptr<iroha::network::ServerRunner> run();
 
       /// Get the address:port string of this peer.
       std::string getAddress() const;
