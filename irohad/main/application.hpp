@@ -41,9 +41,10 @@ namespace iroha {
   namespace network {
     class BlockLoader;
     class ConsensusGate;
-    class PeerCommunicationService;
     class MstTransport;
     class OrderingGate;
+    class PeerCommunicationService;
+    class PeerTlsCertificatesProvider;
     struct TlsCredentials;
   }  // namespace network
   namespace simulator {
@@ -143,6 +144,11 @@ class Irohad {
   RunResult restoreWsv();
 
   /**
+   * Check that the provided keypair is present in the ledger
+   */
+  RunResult validateKeypair();
+
+  /**
    * Drop wsv and block store
    */
   virtual void dropStorage();
@@ -161,6 +167,8 @@ class Irohad {
       std::unique_ptr<iroha::ametsuchi::PostgresOptions> pg_opt);
 
   RunResult initTlsCredentials();
+
+  RunResult initPeerCertProvider();
 
   virtual RunResult initCryptoProvider();
 
@@ -230,6 +238,9 @@ class Irohad {
       my_inter_peer_tls_creds_;
   boost::optional<std::shared_ptr<const iroha::network::TlsCredentials>>
       torii_tls_creds_;
+  boost::optional<
+      std::shared_ptr<const iroha::network::PeerTlsCertificatesProvider>>
+      peer_tls_certificates_provider_;
 
   std::unique_ptr<iroha::PendingTransactionStorageInit>
       pending_txs_storage_init;
